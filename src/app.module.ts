@@ -9,7 +9,9 @@ import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
-    MongooseModule.forRoot('mongodb://localhost:27017/todo_app'), // Local MongoDB
+    MongooseModule.forRoot(
+      'mongodb+srv://sarvarbekred147:sarvarbek.21@todo.xvielxi.mongodb.net/',
+    ), // Local MongoDB
     UserModule,
     TodoModule,
     AuthModule,
