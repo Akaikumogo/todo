@@ -23,6 +23,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user) {
       throw new Error('User not found');
     }
-    return { _id: user._id, username: user.username };
+    // Use type assertion to access _id property
+    const userObj = user as any;
+    return { _id: userObj._id || userObj.id, username: user.username };
   }
 }

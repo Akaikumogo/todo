@@ -28,8 +28,27 @@ export class AuthController {
   @Post('register')
   @ApiOperation({ summary: "Foydalanuvchi ro'yxatdan o'tishi" })
   @ApiResponse({ status: 201, description: "Muvaffaqiyatli ro'yxatdan o'tish" })
-  register(@Body() loginDto: LoginDto) {
-    // LoginDto ishlatilmoqda, lekin alohida RegisterDto yaratish ham mumkin
-    return this.authService.register(loginDto.username, loginDto.password);
+  @ApiResponse({ status: 400, description: "Noto'g'ri ma'lumotlar" })
+  @ApiResponse({ status: 409, description: "Foydalanuvchi nomi allaqachon mavjud" })
+  async register(@Body() loginDto: LoginDto) {
+    try {
+      // Check if user already exists
+      const existingUser = await this.authService.validateUser(loginDto.username, '', false);
+      if (existingUser) {
+        throw new UnauthorizedException('Foydalanuvchi nomi allaqachon mavjud');
+      }
+      
+      // Create new user
+      const newUser = await this.authService.register(loginDto.username, loginDto.password);
+      return {
+        message: "Muvaffaqiyatli ro'yxatdan o'tildi",
+        username: newUser.username
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException("Ro'yxatdan o'tishda xatolik yuz berdi");
+    }
   }
 }

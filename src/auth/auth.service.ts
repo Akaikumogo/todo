@@ -16,12 +16,25 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async validateUser(username: string, password: string): Promise<any> {
+  async validateUser(username: string, password: string, checkPasswordMatch = true): Promise<any> {
     const user = await this.userService.findByUsername(username);
-    if (user && (await bcrypt.compare(password, user.password))) {
-      const { password, ...result } = user.toObject();
+    
+    // If we're just checking if the user exists (for registration)
+    if (!checkPasswordMatch && user) {
+      // Convert to plain object to avoid TypeScript errors
+      const userObj = user as any;
+      const { password, ...result } = userObj.toObject ? userObj.toObject() : userObj;
       return result;
     }
+    
+    // Normal login validation
+    if (user && checkPasswordMatch && (await bcrypt.compare(password, user.password))) {
+      // Convert to plain object to avoid TypeScript errors
+      const userObj = user as any;
+      const { password, ...result } = userObj.toObject ? userObj.toObject() : userObj;
+      return result;
+    }
+    
     return null;
   }
 
