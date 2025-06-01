@@ -19,13 +19,10 @@ export class UserService {
   /**
    * Find a user by username. Throws NotFoundException if not exists.
    */
-  async findByUsername(username: string): Promise<User> {
-    const user = await this.userModel.findOne({ username }).exec();
-    if (!user) {
-      throw new NotFoundException(`User not found: ${username}`);
-    }
-    return user;
+  async findByUsername(username: string): Promise<User | null> {
+    return await this.userModel.findOne({ username }).exec();
   }
+  
 
   /**
    * Retrieve paginated list of users.

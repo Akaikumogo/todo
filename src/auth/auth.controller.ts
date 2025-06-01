@@ -45,6 +45,8 @@ export class AuthController {
         username: newUser.username
       };
     } catch (error) {
+      console.log(error);
+      
       if (error instanceof UnauthorizedException) {
         throw error;
       }
