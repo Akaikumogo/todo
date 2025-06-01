@@ -42,8 +42,8 @@ export class User {
   /**
    * Motor holati: `"off"` yoki `"on"`. ESP kodi “motorState” bilan string (enum) sifatida yuboradi. 
    */
-  @Prop({ type: String, enum: ['off', 'on'], required: false, default: 'off' })
-  motorState?: 'off' | 'on';
+  @Prop({ type: String, enum: ['OFF', 'ON'], required: false, default: 'OFF' })
+  motorState?: 'OFF' | 'ON';
 
   /**
    * Qolgan timer vaqti MM:SS formatida (masalan: "01:23"). 

@@ -65,7 +65,7 @@ async create(username: string, password: string): Promise<User> {
       height: 0,
       totalLitres: 0,
       totalElectricity: 0,
-      motorState: 'off',
+      motorState: 'OFF',
       timerRemaining: '00:00',
       lastTimerTime: undefined,
       lastHeartbeat: undefined,
@@ -107,7 +107,7 @@ async create(username: string, password: string): Promise<User> {
       updateQuery.totalElectricity = updateDto.totalElectricity;
     }
     if (updateDto.motorState !== undefined) {
-      updateQuery.motorState = updateDto.motorState; // must be 'off' or 'on'
+      updateQuery.motorState = updateDto.motorState; // must be 'OFF' or 'ON'
     }
     if (updateDto.timerRemaining !== undefined) {
       updateQuery.timerRemaining = updateDto.timerRemaining;
@@ -200,7 +200,7 @@ async create(username: string, password: string): Promise<User> {
    * - Updates lastTimerTime in DB immediately.
    * - Starts a setInterval to decrement each second.
    * - On each minute tick or last 60s every 10s, updates DB and notifies external service.
-   * - On completion, sets motorState to 'off', timerRemaining to '00:00', updates lastTimerTime, and notifies external service.
+   * - On completion, sets motorState to 'OFF', timerRemaining to '00:00', updates lastTimerTime, and notifies external service.
    */
   private async handleTimerCountdown(username: string, timerHHMM: string): Promise<void> {
     // 1) Validate format HH:MM
@@ -217,7 +217,7 @@ async create(username: string, password: string): Promise<User> {
       await this.userModel.updateOne(
         { username },
         {
-          motorState: 'off',
+          motorState: 'OFF',
           timerRemaining: '00:00',
           lastTimerTime: now,
         },
@@ -261,7 +261,7 @@ async create(username: string, password: string): Promise<User> {
           await this.userModel.updateOne(
             { username },
             {
-              motorState: 'off',
+              motorState: 'OFF',
               timerRemaining: '00:00',
               lastTimerTime: completionTime,
             },
@@ -269,7 +269,7 @@ async create(username: string, password: string): Promise<User> {
 
           // Notify external service of completion
           await this.notifyExternalService(username, {
-            motorState: 'off',
+            motorState: 'OFF',
             timerRemaining: '00:00',
             lastTimerTime: completionTime,
           });

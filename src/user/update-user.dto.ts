@@ -49,12 +49,12 @@ export class UpdateUserDto {
   /** Motor holati: `off` yoki `on` */
   @ApiPropertyOptional({
     description: 'Motor holati',
-    enum: ['off', 'on'],
-    default: 'off',
+    enum: ['OFF', 'ON'],
+    default: 'OFF',
   })
   @IsOptional()
-  @IsEnum(['off', 'on'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
-  motorState?: 'off' | 'on';
+  @IsEnum(['OFF', 'ON'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
+  motorState?: 'OFF' | 'ON';
 
   /** Qolgan timer vaqti (MM:SS formatda, masalan “00:45”) */
   @ApiPropertyOptional({

@@ -42,12 +42,12 @@ export class UpdateUserDto {
 
   @ApiPropertyOptional({
     description: 'Motor holati',
-    enum: ['off', 'on'],
-    default: 'off',
+    enum: ['OFF', 'ON'],
+    default: 'OFF',
   })
   @IsOptional()
-  @IsEnum(['off', 'on'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
-  motorState?: 'off' | 'on';
+  @IsEnum(['OFF', 'ON'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
+  motorState?: 'OFF' | 'ON';
 
   @ApiPropertyOptional({
     description: 'Qolgan timer vaqti (MM:SS)',
@@ -109,13 +109,13 @@ export class CreateUserDto {
 
   @ApiProperty({
     description: 'Motor holati',
-    enum: ['off', 'on'],
+    enum: ['OFF', 'ON'],
     required: false,
-    default: 'off',
+    default: 'OFF',
   })
   @IsOptional()
-  @IsEnum(['off', 'on'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
-  readonly motorState?: 'off' | 'on';
+  @IsEnum(['OFF', 'ON'], { message: 'motorState faqat "off" yoki "on" bo‘lishi kerak' })
+  readonly motorState?: 'OFF' | 'ON';
 
   @ApiProperty({
     description: 'Qolgan timer vaqti (MM:SS)',
