@@ -1,4 +1,3 @@
-// src/user/user.controller.ts
 import {
   Controller,
   Patch,
@@ -10,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { UserService } from './user.service';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { UpdateUserDto } from './user.dto';
+import { UpdateUserDto } from './update-user.dto';
 
 @ApiTags('Users')
 @Controller('users')
@@ -31,14 +30,16 @@ export class UserController {
   }
 
   @Patch(':username')
+  @ApiOperation({ summary: 'Update user by username (partial)' })
   async patchUser(
     @Param('username') username: string,
     @Body() updateData: UpdateUserDto,
   ) {
     return this.userService.updateUser(username, updateData);
-  }
+  }x
 
   @Delete(':username')
+  @ApiOperation({ summary: 'Delete user by username' })
   async deleteUser(@Param('username') username: string) {
     await this.userService.deleteUser(username);
     return { message: 'User deleted successfully' };

@@ -1,29 +1,40 @@
 // src/user/user.service.ts
-import { Injectable } from '@nestjs/common';
+
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, UpdateQuery } from 'mongoose';
 import { User, UserDocument } from './user.schema';
 import * as bcrypt from 'bcrypt';
 import axios from 'axios';
+import { UpdateUserDto } from './update-user.dto';
 
 @Injectable()
 export class UserService {
-  // Store timer interval reference in a Map to prevent memory leaks
-  // and allow proper cleanup when a new timer is set
+  private readonly logger = new Logger(UserService.name);
   private static timerIntervals = new Map<string, NodeJS.Timeout>();
-  
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
+  private readonly externalEndpoint = 'http://185.217.131.96:5151/rooms/submit';
 
-  async findByUsername(username: string): Promise<User | undefined> {
+  constructor(@InjectModel(User.name) private readonly userModel: Model<UserDocument>) {}
+
+  /**
+   * Find a user by username. Throws NotFoundException if not exists.
+   */
+  async findByUsername(username: string): Promise<User> {
     const user = await this.userModel.findOne({ username }).exec();
-    return user || undefined;
+    if (!user) {
+      throw new NotFoundException(`User not found: ${username}`);
+    }
+    return user;
   }
 
-  async getAllUsers(page: number, limit: number) {
+  /**
+   * Retrieve paginated list of users.
+   */
+  async getAllUsers(page = 1, limit = 10) {
     const skip = (page - 1) * limit;
     const [users, total] = await Promise.all([
-      this.userModel.find().skip(skip).limit(limit).exec(),
-      this.userModel.countDocuments(),
+      this.userModel.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+      this.userModel.countDocuments().exec(),
     ]);
     return {
       data: users,
@@ -33,255 +44,302 @@ export class UserService {
     };
   }
 
-  async create(username: string, password: string): Promise<User> {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new this.userModel({ username, password: hashedPassword });
+  /**
+ * Create a new user with hashed password. Throws BadRequestException if username exists.
+ */
+async create(username: string, password: string): Promise<User> {
+  // Check uniqueness
+  const existing = await this.userModel.findOne({ username }).exec();
+  if (existing) {
+    throw new BadRequestException(`Username already exists: ${username}`);
+  }
+
+  // Hash password
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Build creation object with defaults for optional fields
+    const toCreate: Partial<User> = {
+      username,
+      password: hashedPassword,
+      waterDepth: 0,
+      height: 0,
+      totalLitres: 0,
+      totalElectricity: 0,
+      motorState: 'off',
+      timerRemaining: '00:00',
+      lastTimerTime: undefined,
+      lastHeartbeat: undefined,
+    };
+
+    const user = new this.userModel(toCreate);
     return user.save();
   }
 
-  async updateUser(
-    username: string,
-    updateData: Partial<User>,
-  ): Promise<User | null> {
+  /**
+   * Update a user partially by username.
+   * - Applies only fields present in updateDto.
+   * - Notifies external service with updated fields.
+   * - Manages timer countdown if timerRemaining changed.
+   */
+  async updateUser(username: string, updateDto: UpdateUserDto): Promise<User> {
+    // Ensure user exists
+    const user = await this.userModel.findOne({ username }).exec();
+    if (!user) {
+      throw new NotFoundException(`User not found: ${username}`);
+    }
+
+    // Build Mongoose update object
+    const updateQuery: UpdateQuery<UserDocument> = {};
+
+    if (updateDto.password) {
+      updateQuery.password = await bcrypt.hash(updateDto.password, 10);
+    }
+    if (updateDto.waterDepth !== undefined) {
+      updateQuery.waterDepth = updateDto.waterDepth;
+    }
+    if (updateDto.height !== undefined) {
+      updateQuery.height = updateDto.height;
+    }
+    if (updateDto.totalLitres !== undefined) {
+      updateQuery.totalLitres = updateDto.totalLitres;
+    }
+    if (updateDto.totalElectricity !== undefined) {
+      updateQuery.totalElectricity = updateDto.totalElectricity;
+    }
+    if (updateDto.motorState !== undefined) {
+      updateQuery.motorState = updateDto.motorState; // must be 'off' or 'on'
+    }
+    if (updateDto.timerRemaining !== undefined) {
+      updateQuery.timerRemaining = updateDto.timerRemaining;
+    }
+    if (updateDto.lastTimerTime !== undefined) {
+      updateQuery.lastTimerTime = new Date(updateDto.lastTimerTime);
+    }
+    if (updateDto.lastHeartbeat !== undefined) {
+      updateQuery.lastHeartbeat = new Date(updateDto.lastHeartbeat);
+    }
+
+    // Perform the database update
     const updatedUser = await this.userModel
-      .findOneAndUpdate({ username }, updateData, { new: true })
+      .findOneAndUpdate({ username }, updateQuery, { new: true })
       .exec();
-    console.log(updateData,"load data from esp32");
-    
-    if (updatedUser) {
-      try {
-        await axios.post('http://185.217.131.96:5151/rooms/submit', {
-          topic: `esp32/${updatedUser.username}`,
-          data: JSON.stringify(updateData),
-        });
-      } catch (error) {
-        console.error('Error sending data to external service:', error.message);
-      }
+
+    this.logger.log(`Updated user ${username} with: ${JSON.stringify(updateQuery)}`);
+
+    // Notify external service of the update
+    this.notifyExternalService(username, updateQuery).catch((err) =>
+      this.logger.error(`External notify failed for ${username}: ${err.message}`),
+    );
+
+    // If timerRemaining was set, handle countdown logic
+    if (updateDto.timerRemaining) {
+      await this.handleTimerCountdown(username, updateDto.timerRemaining);
     }
 
-
-    
-    if (updateData.timer) {
-      try {
-        // Validate timer format
-        if (!this.isValidTimerFormat(updateData.timer)) {
-          console.error(`Invalid timer format: ${updateData.timer}. Expected format: HH:MM`);
-          throw new Error('Invalid timer format. Expected format: HH:MM');
-        }
-        
-        const totalSeconds = this.parseTimerHHMM(updateData.timer);
-        
-        // Don't proceed if timer is set to 00:00
-        if (totalSeconds <= 0) {
-          console.log(`Timer set to zero for user ${username}, not starting countdown`);
-          return updatedUser;
-        }
-        
-        let remaining = totalSeconds;
-        
-        // Clear any existing timer for this user
-        if (UserService.timerIntervals.has(username)) {
-          console.log(`Clearing existing timer for user ${username}`);
-          clearInterval(UserService.timerIntervals.get(username));
-          UserService.timerIntervals.delete(username);
-        }
-        
-        console.log(`Starting timer for user ${username}: ${updateData.timer} (${totalSeconds} seconds)`);
-        
-        // Get current time in ISO format
-        const currentTime = new Date().toISOString();
-        
-        // Update database immediately with the new timer value and lastTimerTime
-        await this.userModel.updateOne(
-          { username }, 
-          { 
-            timer: updateData.timer,
-            lastTimerTime: currentTime 
-          }
-        );
-        
-        // Set up the interval for countdown
-        const interval = setInterval(async () => {
-          try {
-            // Check if timer should end
-            if (remaining <= 0) {
-              console.log(`Timer completed for user ${username}`);
-              
-              // Clean up interval
-              clearInterval(interval);
-              UserService.timerIntervals.delete(username);
-              
-              // Get current time in ISO format
-              const completionTime = new Date().toISOString();
-              
-              // Update user state in database
-              await this.userModel.updateOne(
-                { username },
-                { 
-                  motorState: 'off', 
-                  timer: '00:00',
-                  lastTimerTime: completionTime 
-                },
-              );
-              
-              // Send notification to external service
-              try {
-                const response = await axios.post('http://185.217.131.96:5151/rooms/submit', {
-                  topic: `esp32/${username}`,
-                  data: JSON.stringify({ 
-                    motorState: 'off', 
-                    timer: '00:00',
-                    lastTimerTime: completionTime 
-                  }),
-                });
-                console.log(`Notification sent to external service for user ${username}`, response.status);
-              } catch (error) {
-                console.error(`Error sending timer completion to external service for user ${username}:`, error.message);
-              }
-              return;
-            }
-            
-            // Decrement timer
-            remaining--;
-            
-            // Format and update timer display every minute (to reduce database writes)
-            if (remaining % 60 === 0 || remaining <= 60) {
-              const timerString = this.formatTimerHHMM(remaining);
-              console.log(`Timer update for user ${username}: ${timerString} (${remaining} seconds remaining)`);
-              // Get current update time
-              const updateTime = new Date().toISOString();
-              
-              await this.userModel.updateOne(
-                { username }, 
-                { 
-                  timer: timerString,
-                  lastTimerTime: updateTime 
-                }
-              );
-              
-              // For the last minute, update more frequently
-              if (remaining <= 60 && remaining % 10 === 0) {
-                try {
-                  await axios.post('http://185.217.131.96:5151/rooms/submit', {
-                    topic: `esp32/${username}`,
-                    data: JSON.stringify({ 
-                      timer: timerString,
-                      lastTimerTime: updateTime 
-                    }),
-                  });
-                } catch (error) {
-                  console.error(`Error sending timer update to external service for user ${username}:`, error.message);
-                }
-              }
-            }
-          } catch (error) {
-            console.error(`Error in timer interval for user ${username}:`, error.message);
-            clearInterval(interval);
-            UserService.timerIntervals.delete(username);
-          }
-        }, 1000);
-        
-        // Store the interval reference
-        UserService.timerIntervals.set(username, interval);
-        
-        // Send initial timer value to external service
-        try {
-          await axios.post('http://185.217.131.96:5151/rooms/submit', {
-            topic: `esp32/${username}`,
-            data: JSON.stringify({ 
-              timer: updateData.timer,
-              lastTimerTime: currentTime 
-            }),
-          });
-        } catch (error) {
-          console.error(`Error sending initial timer to external service for user ${username}:`, error.message);
-        }
-      } catch (error) {
-        console.error(`Failed to set timer for user ${username}:`, error.message);
-      }
-    }
-    return updatedUser;
+    return updatedUser as User;
   }
 
+  /**
+   * Delete a user by username. Also clears any running timer.
+   * Throws NotFoundException if user does not exist.
+   */
   async deleteUser(username: string): Promise<void> {
-    await this.userModel.deleteOne({ username });
+    const result = await this.userModel.deleteOne({ username }).exec();
+    if (result.deletedCount === 0) {
+      throw new NotFoundException(`User not found: ${username}`);
+    }
+    // Clear any active timer for this user
+    if (UserService.timerIntervals.has(username)) {
+      clearInterval(UserService.timerIntervals.get(username));
+      UserService.timerIntervals.delete(username);
+      this.logger.log(`Cleared timer for deleted user ${username}`);
+    }
   }
-  
+
   /**
-   * Updates the heartbeat timestamp for a user
-   * @param username Username to update heartbeat for
-   * @returns Updated user or null if user not found
+   * Update heartbeat timestamp for a user (called e.g. on periodic ping).
+   * Throws NotFoundException if user does not exist.
    */
-  async updateHeartbeat(username: string): Promise<User | null> {
+  async updateHeartbeat(username: string): Promise<User> {
+    const now = new Date();
+    const updated = await this.userModel
+      .findOneAndUpdate({ username }, { lastHeartbeat: now }, { new: true })
+      .exec();
+    if (!updated) {
+      throw new NotFoundException(`User not found: ${username}`);
+    }
+    this.logger.log(`Updated heartbeat for ${username} at ${now.toISOString()}`);
+    return updated;
+  }
+
+  /**
+   * Send a JSON payload to the external service at /rooms/submit.
+   * Payload contains:
+   *   { topic: "esp32/<username>", data: "<stringified JSON last update>" }
+   */
+  private async notifyExternalService(
+    username: string,
+    data: UpdateQuery<UserDocument>,
+  ): Promise<void> {
     try {
-      const currentTime = new Date().toISOString();
-      
-      // Update the user's lastHeartbeat field
-      const updatedUser = await this.userModel
-        .findOneAndUpdate(
-          { username }, 
-          { lastHeartbeat: currentTime },
-          { new: true }
-        )
-        .exec();
-      
-      if (!updatedUser) {
-        console.log(`User not found for heartbeat update: ${username}`);
-        return null;
+      const payload = {
+        topic: `esp32/${username}`,
+        data: JSON.stringify(data),
+      };
+      const response = await axios.post(this.externalEndpoint, payload);
+      this.logger.log(`External submit success for ${username}: ${response.status}`);
+    } catch (err) {
+      throw new Error(`External submit failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Manage timer countdown logic when timerRemaining is set or updated.
+   * - Validates HH:MM format.
+   * - Clears existing interval if present.
+   * - Updates lastTimerTime in DB immediately.
+   * - Starts a setInterval to decrement each second.
+   * - On each minute tick or last 60s every 10s, updates DB and notifies external service.
+   * - On completion, sets motorState to 'off', timerRemaining to '00:00', updates lastTimerTime, and notifies external service.
+   */
+  private async handleTimerCountdown(username: string, timerHHMM: string): Promise<void> {
+    // 1) Validate format HH:MM
+    if (!this.isValidTimerHHMM(timerHHMM)) {
+      throw new BadRequestException(`Invalid timer format: ${timerHHMM}. Expected HH:MM`);
+    }
+
+    // 2) Convert to total seconds
+    const totalSeconds = this.parseHHMMtoSeconds(timerHHMM);
+    if (totalSeconds <= 0) {
+      this.logger.log(`Timer is zero; no countdown for ${username}`);
+      // Ensure DB is synced: motor off, timer 00:00, lastTimerTime = now
+      const now = new Date();
+      await this.userModel.updateOne(
+        { username },
+        {
+          motorState: 'off',
+          timerRemaining: '00:00',
+          lastTimerTime: now,
+        },
+      );
+      return;
+    }
+
+    // 3) Clear existing interval if any
+    if (UserService.timerIntervals.has(username)) {
+      this.logger.log(`Clearing existing timer for ${username}`);
+      clearInterval(UserService.timerIntervals.get(username));
+      UserService.timerIntervals.delete(username);
+    }
+
+    this.logger.log(`Starting timer for ${username}: ${timerHHMM} (${totalSeconds}s)`);
+
+    // 4) Immediately update lastTimerTime in DB
+    const startTime = new Date();
+    await this.userModel.updateOne(
+      { username },
+      {
+        lastTimerTime: startTime,
+      },
+    );
+
+    let remaining = totalSeconds;
+
+    // 5) setInterval for countdown every second
+    const interval = setInterval(async () => {
+      try {
+        remaining--;
+
+        // a) If timer completed
+        if (remaining < 0) {
+          this.logger.log(`Timer completed for ${username}`);
+          clearInterval(interval);
+          UserService.timerIntervals.delete(username);
+
+          const completionTime = new Date();
+          // Update DB: motor off, timerRemaining '00:00', lastTimerTime
+          await this.userModel.updateOne(
+            { username },
+            {
+              motorState: 'off',
+              timerRemaining: '00:00',
+              lastTimerTime: completionTime,
+            },
+          );
+
+          // Notify external service of completion
+          await this.notifyExternalService(username, {
+            motorState: 'off',
+            timerRemaining: '00:00',
+            lastTimerTime: completionTime,
+          });
+          return;
+        }
+
+        // b) Decrement logic: update at each minute tick or every 10s in last minute
+        if (remaining % 60 === 0 || (remaining <= 60 && remaining % 10 === 0)) {
+          const formatted = this.formatSecondsToHHMM(remaining);
+          const updateTime = new Date();
+
+          // Update DB with new timerRemaining & lastTimerTime
+          await this.userModel.updateOne(
+            { username },
+            {
+              timerRemaining: formatted,
+              lastTimerTime: updateTime,
+            },
+          );
+
+          // Notify external service for minute tick or last-minute interval
+          await this.notifyExternalService(username, {
+            timerRemaining: formatted,
+            lastTimerTime: updateTime,
+          });
+          this.logger.log(`Timer update for ${username}: ${formatted} (${remaining}s left)`);
+        }
+      } catch (err) {
+        this.logger.error(`Timer interval error for ${username}: ${err.message}`);
+        clearInterval(interval);
+        UserService.timerIntervals.delete(username);
       }
-      
-      console.log(`Updated heartbeat for user ${username} at ${currentTime}`);
-      return updatedUser;
-    } catch (error) {
-      console.error(`Error updating heartbeat for user ${username}:`, error.message);
-      throw error;
-    }
+    }, 1000);
+
+    UserService.timerIntervals.set(username, interval);
+
+    // 6) Send initial timer start notification
+    await this.notifyExternalService(username, {
+      timerRemaining: timerHHMM,
+      lastTimerTime: startTime,
+    });
   }
 
   /**
-   * Validates if a string is in the correct HH:MM format
-   * @param timer Timer string to validate
-   * @returns True if the format is valid
+   * Validate HH:MM format (00 ≤ HH ≤ 23, 00 ≤ MM ≤ 59).
    */
-  private isValidTimerFormat(timer: string): boolean {
-    // Check if the string matches the HH:MM pattern
-    const regex = /^([0-9]{1,2}):([0-9]{1,2})$/;
-    if (!regex.test(timer)) {
-      return false;
-    }
-    
-    // Extract hours and minutes and validate ranges
-    const [hours, minutes] = timer.split(':').map(Number);
-    return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+  private isValidTimerHHMM(str: string): boolean {
+    const regex = /^([0-1]\d|2[0-3]):([0-5]\d)$/;
+    return regex.test(str);
   }
 
   /**
-   * Converts a timer string in HH:MM format to total seconds
-   * @param timer Timer string in HH:MM format
-   * @returns Total seconds
+   * Convert "HH:MM" string to total seconds.
    */
-  private parseTimerHHMM(timer: string): number {
-    if (!this.isValidTimerFormat(timer)) {
-      return 0;
-    }
-    
-    const [hours, minutes] = timer.split(':').map(Number);
-    return hours * 3600 + minutes * 60;
+  private parseHHMMtoSeconds(str: string): number {
+    const [h, m] = str.split(':').map((p) => parseInt(p, 10));
+    return h * 3600 + m * 60;
   }
 
   /**
-   * Formats a total seconds value to HH:MM format
-   * @param seconds Total seconds to format
-   * @returns Formatted time string in HH:MM format
+   * Format seconds into "HH:MM" (caps hours up to 23, minutes up to 59).
    */
-  private formatTimerHHMM(seconds: number): string {
-    if (seconds < 0) {
+  private formatSecondsToHHMM(sec: number): string {
+    if (sec <= 0) {
       return '00:00';
     }
-    
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    const hours = Math.floor(sec / 3600);
+    const minutes = Math.floor((sec % 3600) / 60);
+    return `${hours.toString().padStart(2, '0')}:${minutes
+      .toString()
+      .padStart(2, '0')}`;
   }
 }

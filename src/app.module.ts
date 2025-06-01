@@ -10,7 +10,7 @@ import { AuthModule } from './auth/auth.module';
   imports: [
     MongooseModule.forRoot(
       'mongodb+srv://sarvarbekred147:IrkuAskYxMTvSYXJ@cluster0.gvo7dgp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0',
-    ), // Local MongoDB
+    ),
     UserModule,
 
     AuthModule,

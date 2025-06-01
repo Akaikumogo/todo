@@ -1,43 +1,71 @@
-// src/user/user.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
-@Schema()
+export type UserDocument = User & Document;
+
+@Schema({ timestamps: true })
 export class User {
-  toObject(): { [x: string]: any; password: any; } {
-    throw new Error('Method not implemented.');
-  }
   @Prop({ unique: true, required: true })
   username: string;
 
   @Prop({ required: true })
   password: string;
 
-  @Prop({ required: false })
-  waterHeight: string;
+  // ----------------------------------------------------
+  // ESP32’dan keladigan maydonlar
+  // ----------------------------------------------------
 
-  @Prop({ required: false })
-  totalElectricity: string;
+  /** 
+   * Suv chuqurligi (cm). ESP kodi “waterDepth” kaliti bilan butun son (Number) sifatida yuboradi. 
+   */
+  @Prop({ type: Number, required: false, default: 0 })
+  waterDepth?: number;
 
-  @Prop({ required: false })
-  waterVolume: string;
+  /**
+   * O‘rnatilgan balandlik (cm). ESP kodi “height” kaliti bilan butun son (Number) keladi. 
+   */
+  @Prop({ type: Number, required: false, default: 0 })
+  height?: number;
 
-  @Prop({ required: false })
-  motorState: 'off' | 'on';
+  /**
+   * Sarflangan suv miqdori (L). ESP kodi “totalLitres” bilan float/tub son keltiradi. 
+   */
+  @Prop({ type: Number, required: false, default: 0 })
+  totalLitres?: number;
 
-  @Prop({ required: false })
-  totalWater: string;
+  /**
+   * Elektr iste’moli (kW). ESP kodi “totalElectricity” kaliti bilan float/tub son keltiradi. 
+   */
+  @Prop({ type: Number, required: false, default: 0 })
+  totalElectricity?: number;
 
-  @Prop({ required: false })
-  timer: string;
+  /**
+   * Motor holati: `"off"` yoki `"on"`. ESP kodi “motorState” bilan string (enum) sifatida yuboradi. 
+   */
+  @Prop({ type: String, enum: ['off', 'on'], required: false, default: 'off' })
+  motorState?: 'off' | 'on';
 
-  @Prop({ required: false })
-  lastTimerTime: string;
+  /**
+   * Qolgan timer vaqti MM:SS formatida (masalan: "01:23"). 
+   * ESP kodi “timerRemaining” kaliti bilan shu formatda string yuboradi. 
+   */
+  @Prop({ type: String, required: false, default: '00:00' })
+  timerRemaining?: string;
 
-  @Prop({ required: false })
-  lastHeartbeat: string;
+  /**
+   * Timer oxirgi marta o‘rnatilgan vaqt (ISO-formatdagi sana/soat). 
+   * ESP kodi “lastTimerTime” kaliti bilan, misol uchun: "2025-06-01T12:34:56.000Z".
+   */
+  @Prop({ type: Date, required: false })
+  lastTimerTime?: Date;
 
+  /**
+   * Oxirgi “heartbeat” (ESP dan serverga berilgan so‘ngi signal) vaqti (ISO 8601 format). 
+   * Har PATCH so‘rovi kelganda, ESP kodi har doim hozirgi vaqtni “lastHeartbeat” kaliti bilan yuborsa,
+   * bu maydonni yangilash mumkin. 
+   */
+  @Prop({ type: Date, required: false })
+  lastHeartbeat?: Date;
 }
 
-export type UserDocument = User & Document;
 export const UserSchema = SchemaFactory.createForClass(User);
